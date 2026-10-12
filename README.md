@@ -143,7 +143,7 @@ Tests should be run on sample directories created specifically for testing.
 
 The objective of this project is to apply discrete mathematics concepts to a real-world computing problem while developing practical skills in Python programming, file handling, hashing, testing, and software development.
 
-## 👥 Contributors
+## Contributors
 
-- **[Shloke Ghoshal]**
-- **[Prasit Raithatha]**
+- **Shloke Ghoshal**
+- **Prasit Raithatha**
