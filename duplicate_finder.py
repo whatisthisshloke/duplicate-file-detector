@@ -17,7 +17,7 @@ import hashlib
 import json
 import time
 
-from scanner import ScanResult
+from scanner import ScanResult, scan_directory
 
 
 # ---------- Helper functions ----------
@@ -176,6 +176,7 @@ class DetectionReport:
 
 # ---------- Duplicate detection ----------
 
+
 def find_duplicates(
     root_path: Path,
     min_size_bytes: int = 0,
@@ -184,139 +185,120 @@ def find_duplicates(
     verify_byte_by_byte: bool = True,
     status_callback: Optional[Callable[[str, int, int], None]] = None,
 ) -> DetectionReport:
-    """
-    Read-only four-stage duplicate detection pipeline.
+    """Scan, hash, and verify duplicate files without modifying them."""
 
-    Note: This version builds its own file list. It stores a ScanResult
-    wrapper for reporting; adapt that construction to your scanner.py.
-    """
     start_time = time.perf_counter()
-    root_path = Path(root_path)
+    stage_durations = {}
 
-    if not root_path.is_dir():
-        raise ValueError(f"Not a valid directory: {root_path}")
-
-    durations = {}
-    groups = []
-
-    # Stage 1: Scan files and collect their sizes.
+    # Stage 1: Use scanner.py to discover files.
     stage_start = time.perf_counter()
-    files_by_size = defaultdict(list)
 
-    for path in root_path.rglob("*"):
-        try:
-            if path.is_symlink() and not follow_symlinks:
-                continue
+    scan_result = scan_directory(
+        root_path=Path(root_path),
+        min_size_bytes=min_size_bytes,
+        include_hidden=include_hidden,
+        follow_symlinks=follow_symlinks,
+    )
 
-            if not include_hidden:
-                relative_parts = path.relative_to(root_path).parts
-                if any(part.startswith(".") for part in relative_parts):
-                    continue
+    stage_durations["scan"] = time.perf_counter() - stage_start
 
-            if not path.is_file():
-                continue
+    # Stage 2: scanner.py has already grouped files by size.
+    candidate_groups = scan_result.candidate_size_groups
 
-            size = path.stat().st_size
+    stage_durations["size_grouping"] = 0.0
 
-            if size >= min_size_bytes:
-                files_by_size[size].append(path)
-
-        except (OSError, ValueError) as error:
-            print(f"Skipping {path}: {error}")
-
-    durations["scan"] = time.perf_counter() - stage_start
-
-    # Stage 2: Only files with matching sizes are candidates.
+    # Stage 3: Calculate SHA-256 for candidate files.
     stage_start = time.perf_counter()
-    candidates = [
+    hashes = {}
+
+    all_candidates = [
         path
-        for paths in files_by_size.values()
-        if len(paths) > 1
+        for paths in candidate_groups.values()
         for path in paths
     ]
-    durations["size_grouping"] = time.perf_counter() - stage_start
 
-    # Stage 3: Hash candidate files and group matching hashes.
-    stage_start = time.perf_counter()
-    hashes_by_size_and_hash = defaultdict(list)
-    total = len(candidates)
+    total = len(all_candidates)
 
-    for index, path in enumerate(candidates, start=1):
-        report_progress(
-            status_callback, "Hashing files", index, total
-        )
+    for index, path in enumerate(all_candidates, start=1):
+        if status_callback:
+            status_callback("Hashing files", index, total)
 
         try:
-            digest = calculate_sha256(path)
-            size = path.stat().st_size
-            hashes_by_size_and_hash[(size, digest)].append(path)
+            hashes[path] = calculate_sha256(path)
         except OSError as error:
-            print(f"Could not hash {path}: {error}")
-
-    durations["hashing"] = time.perf_counter() - stage_start
-
-    # Stage 4: Confirm files have identical contents.
-    stage_start = time.perf_counter()
-
-    for (size, digest), paths in hashes_by_size_and_hash.items():
-        if len(paths) < 2:
-            continue
-
-        if not verify_byte_by_byte:
-            # Hash matches are candidates, not guaranteed proof.
-            groups.append(
-                DuplicateGroup(
-                    size=size,
-                    sha256=digest,
-                    files=paths,
-                    verified_byte_for_byte=False,
-                )
+            scan_result.skipped_files.append(
+                f"{path}: {error}"
             )
-            continue
 
-        # Split into groups of byte-identical files.
-        identical_groups = []
+    stage_durations["hashing"] = time.perf_counter() - stage_start
+
+    # Stage 4: Group matching hashes and verify file contents.
+    stage_start = time.perf_counter()
+    duplicate_groups = []
+
+    for size, paths in candidate_groups.items():
+        hash_groups = defaultdict(list)
 
         for path in paths:
-            matched_group = None
+            if path in hashes:
+                hash_groups[hashes[path]].append(path)
 
-            for candidate_group in identical_groups:
-                try:
-                    if files_are_identical(path, candidate_group[0]):
-                        matched_group = candidate_group
-                        break
-                except OSError as error:
-                    print(f"Could not compare {path}: {error}")
+        for digest, matching_paths in hash_groups.items():
+            if len(matching_paths) < 2:
+                continue
 
-            if matched_group is None:
-                identical_groups.append([path])
-            else:
-                matched_group.append(path)
-
-        for identical_files in identical_groups:
-            if len(identical_files) > 1:
-                groups.append(
+            if not verify_byte_by_byte:
+                duplicate_groups.append(
                     DuplicateGroup(
                         size=size,
                         sha256=digest,
-                        files=identical_files,
-                        verified_byte_for_byte=True,
+                        files=matching_paths,
+                        verified_byte_for_byte=False,
                     )
                 )
+                continue
 
-    durations["byte_verification"] = time.perf_counter() - stage_start
+            # Split matching hashes into byte-identical groups.
+            verified_groups = []
 
-    # Adapt this section if your ScanResult requires different fields.
-    scan_result = ScanResult()
+            for path in matching_paths:
+                placed = False
 
-    report = DetectionReport(
-        scan_result=scan_result,
-        groups=groups,
-        stage_durations=durations,
-        total_duration_seconds=time.perf_counter() - start_time,
+                for group in verified_groups:
+                    try:
+                        if files_are_identical(path, group[0]):
+                            group.append(path)
+                            placed = True
+                            break
+                    except OSError as error:
+                        scan_result.skipped_files.append(
+                            f"{path}: {error}"
+                        )
+
+                if not placed:
+                    verified_groups.append([path])
+
+            for group in verified_groups:
+                if len(group) > 1:
+                    duplicate_groups.append(
+                        DuplicateGroup(
+                            size=size,
+                            sha256=digest,
+                            files=group,
+                            verified_byte_for_byte=True,
+                        )
+                    )
+
+    stage_durations["byte_verification"] = (
+        time.perf_counter() - stage_start
     )
 
-    return report
+    return DetectionReport(
+        scan_result=scan_result,
+        groups=duplicate_groups,
+        stage_durations=stage_durations,
+        total_duration_seconds=time.perf_counter() - start_time,
+    )
 
 
 # ---------- Export and safe cleanup proposal ----------

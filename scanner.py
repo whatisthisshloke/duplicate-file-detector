@@ -51,7 +51,15 @@ def scan_directory(
     start_time = time.time()
     result = ScanResult(root_directory=root_path)
 
-    for current_dir, dirs, files in os.walk(root_path):
+    for current_dir, dirs, files in os.walk(
+    root_path,
+    followlinks=follow_symlinks
+    ):
+        if not include_hidden:
+            dirs[:] = [
+                directory for directory in dirs
+                if not directory.startswith(".")
+        ]
 
         for filename in files:
             file_path = Path(current_dir) / filename
