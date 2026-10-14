@@ -8,12 +8,68 @@ Data models and function declarations for running the 4-stage pipeline:
   Stage 4: Byte-for-byte exact verification
 """
 
-from dataclasses import dataclass, field
+
+from dataclasses import dataclass, field, asdict, is_dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
+from collections import defaultdict
+import hashlib
+import json
+import time
 
 from scanner import ScanResult
 
+
+# ---------- Helper functions ----------
+
+def format_bytes(size: int) -> str:
+    """Convert bytes into a readable size such as KB or MB."""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    value = float(size)
+
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{value:.2f} {unit}"
+        value /= 1024
+
+    return f"{size} B"
+
+
+def calculate_sha256(path: Path) -> str:
+    """Calculate a file's SHA-256 hash without loading it all into memory."""
+    sha256 = hashlib.sha256()
+
+    with path.open("rb") as file:
+        while True:
+            chunk = file.read(4096)
+            if not chunk:
+                break
+            sha256.update(chunk)
+
+    return sha256.hexdigest()
+
+
+def files_are_identical(first: Path, second: Path) -> bool:
+    """Compare two files byte-for-byte in chunks."""
+    with first.open("rb") as file_a, second.open("rb") as file_b:
+        while True:
+            chunk_a = file_a.read(4096)
+            chunk_b = file_b.read(4096)
+
+            if chunk_a != chunk_b:
+                return False
+
+            if not chunk_a:
+                return True
+
+
+def report_progress(callback, message, current, total):
+    """Call the progress callback if one was supplied."""
+    if callback is not None:
+        callback(message, current, total)
+
+
+# ---------- Data classes ----------
 
 @dataclass
 class DuplicateGroup:
@@ -25,27 +81,36 @@ class DuplicateGroup:
 
     @property
     def wasted_bytes(self) -> int:
-        """Space wasted by duplicates (excluding 1 original keeper)."""
-        pass
+        """Space wasted by duplicates, keeping one original."""
+        return max(0, len(self.files) - 1) * self.size
 
     @property
     def wasted_formatted(self) -> str:
-        """Human-readable string of wasted space."""
-        pass
+        """Human-readable wasted space."""
+        return format_bytes(self.wasted_bytes)
 
     @property
     def size_formatted(self) -> str:
-        """Human-readable string of individual file size."""
-        pass
+        """Human-readable size of one file."""
+        return format_bytes(self.size)
 
     def to_dict(self) -> dict:
-        """Serialize duplicate group to a dictionary."""
-        pass
+        """Convert this group to a JSON-friendly dictionary."""
+        return {
+            "size_bytes": self.size,
+            "size_formatted": self.size_formatted,
+            "sha256": self.sha256,
+            "files": [str(path) for path in self.files],
+            "file_count": len(self.files),
+            "wasted_bytes": self.wasted_bytes,
+            "wasted_formatted": self.wasted_formatted,
+            "verified_byte_for_byte": self.verified_byte_for_byte,
+        }
 
 
 @dataclass
 class DetectionReport:
-    """Complete summary of duplicate scan results and performance statistics."""
+    """Complete summary of duplicate detection."""
     scan_result: ScanResult
     groups: List[DuplicateGroup] = field(default_factory=list)
     stage_durations: Dict[str, float] = field(default_factory=dict)
@@ -53,28 +118,63 @@ class DetectionReport:
 
     @property
     def total_duplicate_groups(self) -> int:
-        pass
+        return len(self.groups)
 
     @property
     def total_duplicate_files(self) -> int:
-        pass
+        """Count all files that belong to duplicate groups."""
+        return sum(len(group.files) for group in self.groups)
 
     @property
     def redundant_files_count(self) -> int:
-        pass
+        """Count extra copies, excluding one keeper per group."""
+        return sum(max(0, len(group.files) - 1) for group in self.groups)
 
     @property
     def total_wasted_bytes(self) -> int:
-        pass
+        return sum(group.wasted_bytes for group in self.groups)
 
     @property
     def total_wasted_formatted(self) -> str:
-        pass
+        return format_bytes(self.total_wasted_bytes)
 
     def to_dict(self) -> dict:
-        """Serialize report to a dictionary for JSON output."""
-        pass
+        """Convert the report to a JSON-friendly dictionary."""
+        if is_dataclass(self.scan_result):
+            scan_data = asdict(self.scan_result)
+        elif hasattr(self.scan_result, "to_dict"):
+            scan_data = self.scan_result.to_dict()
+        else:
+            scan_data = str(self.scan_result)
 
+        # Convert any Path values inside the scan result to strings.
+        def make_json_safe(value):
+            if isinstance(value, Path):
+                return str(value)
+            if isinstance(value, dict):
+                return {str(k): make_json_safe(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [make_json_safe(item) for item in value]
+            return value
+
+        return {
+            "scan_result": make_json_safe(scan_data),
+            "duplicate_groups": [
+                group.to_dict() for group in self.groups
+            ],
+            "summary": {
+                "total_duplicate_groups": self.total_duplicate_groups,
+                "total_duplicate_files": self.total_duplicate_files,
+                "redundant_files_count": self.redundant_files_count,
+                "total_wasted_bytes": self.total_wasted_bytes,
+                "total_wasted_formatted": self.total_wasted_formatted,
+            },
+            "stage_durations_seconds": self.stage_durations,
+            "total_duration_seconds": self.total_duration_seconds,
+        }
+
+
+# ---------- Duplicate detection ----------
 
 def find_duplicates(
     root_path: Path,
@@ -85,20 +185,180 @@ def find_duplicates(
     status_callback: Optional[Callable[[str, int, int], None]] = None,
 ) -> DetectionReport:
     """
-    Execute the full 4-stage duplicate detection pipeline.
-    Purely read-only; NEVER modifies or deletes files on disk.
-    """
-    pass
+    Read-only four-stage duplicate detection pipeline.
 
+    Note: This version builds its own file list. It stores a ScanResult
+    wrapper for reporting; adapt that construction to your scanner.py.
+    """
+    start_time = time.perf_counter()
+    root_path = Path(root_path)
+
+    if not root_path.is_dir():
+        raise ValueError(f"Not a valid directory: {root_path}")
+
+    durations = {}
+    groups = []
+
+    # Stage 1: Scan files and collect their sizes.
+    stage_start = time.perf_counter()
+    files_by_size = defaultdict(list)
+
+    for path in root_path.rglob("*"):
+        try:
+            if path.is_symlink() and not follow_symlinks:
+                continue
+
+            if not include_hidden:
+                relative_parts = path.relative_to(root_path).parts
+                if any(part.startswith(".") for part in relative_parts):
+                    continue
+
+            if not path.is_file():
+                continue
+
+            size = path.stat().st_size
+
+            if size >= min_size_bytes:
+                files_by_size[size].append(path)
+
+        except (OSError, ValueError) as error:
+            print(f"Skipping {path}: {error}")
+
+    durations["scan"] = time.perf_counter() - stage_start
+
+    # Stage 2: Only files with matching sizes are candidates.
+    stage_start = time.perf_counter()
+    candidates = [
+        path
+        for paths in files_by_size.values()
+        if len(paths) > 1
+        for path in paths
+    ]
+    durations["size_grouping"] = time.perf_counter() - stage_start
+
+    # Stage 3: Hash candidate files and group matching hashes.
+    stage_start = time.perf_counter()
+    hashes_by_size_and_hash = defaultdict(list)
+    total = len(candidates)
+
+    for index, path in enumerate(candidates, start=1):
+        report_progress(
+            status_callback, "Hashing files", index, total
+        )
+
+        try:
+            digest = calculate_sha256(path)
+            size = path.stat().st_size
+            hashes_by_size_and_hash[(size, digest)].append(path)
+        except OSError as error:
+            print(f"Could not hash {path}: {error}")
+
+    durations["hashing"] = time.perf_counter() - stage_start
+
+    # Stage 4: Confirm files have identical contents.
+    stage_start = time.perf_counter()
+
+    for (size, digest), paths in hashes_by_size_and_hash.items():
+        if len(paths) < 2:
+            continue
+
+        if not verify_byte_by_byte:
+            # Hash matches are candidates, not guaranteed proof.
+            groups.append(
+                DuplicateGroup(
+                    size=size,
+                    sha256=digest,
+                    files=paths,
+                    verified_byte_for_byte=False,
+                )
+            )
+            continue
+
+        # Split into groups of byte-identical files.
+        identical_groups = []
+
+        for path in paths:
+            matched_group = None
+
+            for candidate_group in identical_groups:
+                try:
+                    if files_are_identical(path, candidate_group[0]):
+                        matched_group = candidate_group
+                        break
+                except OSError as error:
+                    print(f"Could not compare {path}: {error}")
+
+            if matched_group is None:
+                identical_groups.append([path])
+            else:
+                matched_group.append(path)
+
+        for identical_files in identical_groups:
+            if len(identical_files) > 1:
+                groups.append(
+                    DuplicateGroup(
+                        size=size,
+                        sha256=digest,
+                        files=identical_files,
+                        verified_byte_for_byte=True,
+                    )
+                )
+
+    durations["byte_verification"] = time.perf_counter() - stage_start
+
+    # Adapt this section if your ScanResult requires different fields.
+    scan_result = ScanResult()
+
+    report = DetectionReport(
+        scan_result=scan_result,
+        groups=groups,
+        stage_durations=durations,
+        total_duration_seconds=time.perf_counter() - start_time,
+    )
+
+    return report
+
+
+# ---------- Export and safe cleanup proposal ----------
 
 def export_report_json(report: DetectionReport, output_file: Path) -> None:
-    """Export the detection report to a formatted JSON file."""
-    pass
+    """Export the detection report as formatted JSON."""
+    output_file = Path(output_file)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_file.open("w", encoding="utf-8") as file:
+        json.dump(report.to_dict(), file, indent=4)
 
 
-def generate_safe_cleanup_script(report: DetectionReport, script_path: Path) -> None:
+def generate_safe_cleanup_script(
+    report: DetectionReport,
+    script_path: Path
+) -> None:
     """
-    Generate an explicit review-first cleanup shell script (bash or batch)
-    with proposed deletion commands commented out by default.
+    Generate a review-first Bash script.
+    Deletion commands are comments and will NOT run automatically.
     """
-    pass
+    script_path = Path(script_path)
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        "#!/usr/bin/env bash",
+        "# REVIEW CAREFULLY before enabling any deletion command.",
+        "# This script does not delete files as generated.",
+        "",
+    ]
+
+    for number, group in enumerate(report.groups, start=1):
+        lines.append(f"# Duplicate group {number}")
+        lines.append(f"# SHA-256: {group.sha256}")
+        lines.append(f"# Size per file: {group.size_formatted}")
+
+        # Keep the first path and propose the remaining copies.
+        for duplicate in group.files[1:]:
+            safe_path = str(duplicate).replace("'", "'\\''")
+            lines.append(f"# rm -- '{safe_path}'")
+
+        lines.append("")
+
+    with script_path.open("w", encoding="utf-8", newline="\n") as file:
+        file.write("\n".join(lines))
