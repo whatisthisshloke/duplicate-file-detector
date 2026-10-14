@@ -1,26 +1,51 @@
 {
     "scan_result": {
         "root_directory": "test_folder",
-        "total_files_found": 0,
-        "total_bytes_found": 0,
-        "size_groups": {},
-        "candidate_size_groups": {},
+        "total_files_found": 2,
+        "total_bytes_found": 638,
+        "size_groups": {
+            "319": [
+                "test_folder\\dupe file.txt",
+                "test_folder\\Text file"
+            ]
+        },
+        "candidate_size_groups": {
+            "319": [
+                "test_folder\\dupe file.txt",
+                "test_folder\\Text file"
+            ]
+        },
         "skipped_files": [],
-        "scan_duration_seconds": 0.000225067138671875
+        "scan_duration_seconds": 0.00018787384033203125
     },
-    "duplicate_groups": [],
+    "duplicate_groups": [
+        {
+            "size_bytes": 319,
+            "size_formatted": "319.00 B",
+            "sha256": "a742534c1314633b0e761832ac9aef067c0e3d78dc25a953ec5e3280d2b45670",
+            "files": [
+                "test_folder\\dupe file.txt",
+                "test_folder\\Text file"
+            ],
+            "file_count": 2,
+            "wasted_bytes": 319,
+            "wasted_formatted": "319.00 B",
+            "verified_byte_for_byte": true
+        }
+    ],
     "summary": {
-        "total_duplicate_groups": 0,
-        "total_duplicate_files": 0,
-        "redundant_files_count": 0,
-        "total_wasted_bytes": 0,
-        "total_wasted_formatted": "0.00 B"
+        "total_duplicate_groups": 1,
+        "total_duplicate_files": 2,
+        "redundant_files_count": 1,
+        "total_wasted_bytes": 319,
+        "total_wasted_formatted": "319.00 B"
     },
     "stage_durations_seconds": {
-        "scan": 0.0002610000083222985,
-        "size_grouping": 0.0,
-        "hashing": 1.600012183189392e-06,
-        "byte_verification": 3.00002284348011e-07
+        "scan": 0.000242199981585145,
+        "partial_hash": 0.00021890003699809313,
+        "size_grouping": 0.00021890003699809313,
+        "hashing": 0.00013149995356798172,
+        "byte_verification": 0.0003200999926775694
     },
-    "total_duration_seconds": 0.0002645000349730253
+    "total_duration_seconds": 0.000915299984626472
 }

@@ -80,20 +80,6 @@ def demonstrate_pigeonhole_principle(
     return buckets
 
 
-def demonstrate_birthday_paradox(num_buckets: int = 256) -> None:
-    """
-    Illustrate the Birthday Paradox: why collisions occur far faster than N = K + 1.
-    """
-    print("\n========== BIRTHDAY PARADOX DEMONSTRATION ==========")
-    print(f"In a hash space of K = {num_buckets} buckets:")
-    print(f"- Dirichlet's Pigeonhole Principle guarantees a collision at N = {num_buckets + 1} items.")
-    print(f"- However, by the Birthday Paradox, the collision probability exceeds 50%")
-    print(f"  at approximately N ≈ 1.177 * sqrt({num_buckets}) ≈ {int(1.177 * (num_buckets ** 0.5))} items!")
-
-    sample_items = [f"item_{i}" for i in range(25)]
-    demonstrate_pigeonhole_principle(sample_items, num_buckets)
-
-
 def demonstrate_sha256_comparison(first: str = "listen", second: str = "silent") -> None:
     """
     Compare toy hash with SHA-256 using colliding inputs.
@@ -186,10 +172,9 @@ def run_interactive_demo() -> None:
 
     while True:
         print("\n1. Pigeonhole Principle and collisions")
-        print("2. Birthday Paradox illustration")
-        print("3. Toy hash vs SHA-256 collision comparison")
-        print("4. Compare files in test_folder")
-        print("5. Exit")
+        print("2. Toy hash vs SHA-256 collision comparison")
+        print("3. Compare files in test_folder")
+        print("4. Exit")
 
         choice = input("Choose an option: ").strip()
 
@@ -202,10 +187,8 @@ def run_interactive_demo() -> None:
                 print(f"Using {len(words)} default words.")
             demonstrate_pigeonhole_principle(words)
 
-        elif choice == "2":
-            demonstrate_birthday_paradox()
 
-        elif choice == "3":
+        elif choice == "2":
             user_pair = input("Enter 2 words separated by comma (press Enter for 'listen, silent'): ").strip()
             if user_pair and "," in user_pair:
                 w1, w2 = [w.strip() for w in user_pair.split(",", 1)]
@@ -213,7 +196,7 @@ def run_interactive_demo() -> None:
             else:
                 demonstrate_sha256_comparison("listen", "silent")
 
-        elif choice == "4":
+        elif choice == "3":
             test_dir = Path("test_folder")
             files = [f for f in test_dir.iterdir() if f.is_file()] if test_dir.is_dir() else []
             if len(files) >= 2:
@@ -221,7 +204,7 @@ def run_interactive_demo() -> None:
             else:
                 print("test_folder needs at least 2 files to compare.")
 
-        elif choice == "5":
+        elif choice == "4":
             break
 
         else:
