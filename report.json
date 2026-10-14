@@ -1,0 +1,26 @@
+{
+    "scan_result": {
+        "root_directory": "test_folder",
+        "total_files_found": 0,
+        "total_bytes_found": 0,
+        "size_groups": {},
+        "candidate_size_groups": {},
+        "skipped_files": [],
+        "scan_duration_seconds": 0.000225067138671875
+    },
+    "duplicate_groups": [],
+    "summary": {
+        "total_duplicate_groups": 0,
+        "total_duplicate_files": 0,
+        "redundant_files_count": 0,
+        "total_wasted_bytes": 0,
+        "total_wasted_formatted": "0.00 B"
+    },
+    "stage_durations_seconds": {
+        "scan": 0.0002610000083222985,
+        "size_grouping": 0.0,
+        "hashing": 1.600012183189392e-06,
+        "byte_verification": 3.00002284348011e-07
+    },
+    "total_duration_seconds": 0.0002645000349730253
+}
