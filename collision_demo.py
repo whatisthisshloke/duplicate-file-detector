@@ -21,18 +21,32 @@ BANNER = """
 
 
 
-from typing import Dict, List
+from typing import Dict, List, Optional
+from pathlib import Path
 import hashlib
+
+from hash_utils import toy_hash, compute_file_sha256, compare_files_byte_by_byte
+
 
 def demonstrate_pigeonhole_principle(
     sample_items: List[str],
     num_buckets: int = 16
 ) -> Dict[int, List[str]]:
+    """
+    Map sample items to finite buckets using toy_hash and display collisions.
+    Verifies Dirichlet's Box Principle: max items in any bucket >= ceil(N / K).
+    """
+    if num_buckets <= 0:
+        raise ValueError("Number of buckets must be greater than zero")
 
-    buckets = {}
+    if not sample_items:
+        print("\nNo items provided for Pigeonhole Principle demonstration.")
+        return {}
+
+    buckets: Dict[int, List[str]] = {}
 
     for item in sample_items:
-        bucket_number = sum(ord(char) for char in item) % num_buckets
+        bucket_number = toy_hash(item, num_buckets)
 
         if bucket_number not in buckets:
             buckets[bucket_number] = []
@@ -40,83 +54,174 @@ def demonstrate_pigeonhole_principle(
         buckets[bucket_number].append(item)
 
     print("\n--- Hash Bucket Distribution ---")
-
-    for bucket, items in buckets.items():
-        print(f"Bucket {bucket}: {items}")
+    collision_count = 0
+    for bucket in sorted(buckets.keys()):
+        items = buckets[bucket]
+        collision_note = ""
         if len(items) > 1:
-            print("  COLLISION! Different items share this bucket.")
+            collision_note = f" <- COLLISION! ({len(items)} items share bucket {bucket})"
+            collision_count += 1
+        print(f"Bucket {bucket:2d}: {items}{collision_note}")
 
-    if sample_items:
-        minimum_max_size = (
-            len(sample_items) + num_buckets - 1
-        ) // num_buckets
+    minimum_max_size = (len(sample_items) + num_buckets - 1) // num_buckets
+    largest_bucket = max(len(items) for items in buckets.values())
 
-        largest_bucket = max(len(items) for items in buckets.values())
+    print(f"\n--- Pigeonhole Principle Verification ---")
+    print(f"Number of items (pigeons N): {len(sample_items)}")
+    print(f"Number of buckets (pigeonholes K): {num_buckets}")
+    print(f"Minimum guaranteed maximum bucket size (ceil(N / K)): {minimum_max_size}")
+    print(f"Actual largest bucket size: {largest_bucket}")
+    print(f"Total collided buckets: {collision_count}")
 
-        print(f"\nNumber of items: {len(sample_items)}")
-        print(f"Number of buckets: {num_buckets}")
-        print(f"Minimum guaranteed maximum bucket size: {minimum_max_size}")
-        print(f"Actual largest bucket size: {largest_bucket}")
-
-        assert largest_bucket >= minimum_max_size
+    assert largest_bucket >= minimum_max_size, (
+        f"Pigeonhole Principle violation: {largest_bucket} < {minimum_max_size}"
+    )
 
     return buckets
 
 
 def demonstrate_birthday_paradox(num_buckets: int = 256) -> None:
-    print("\nBirthday Paradox:")
-    print("With many items and a limited number of buckets,")
-    print("collisions can occur even when items < buckets.")
-    demonstrate_pigeonhole_principle(
-        ["item" + str(i) for i in range(25)],
-        num_buckets
-    )
+    """
+    Illustrate the Birthday Paradox: why collisions occur far faster than N = K + 1.
+    """
+    print("\n========== BIRTHDAY PARADOX DEMONSTRATION ==========")
+    print(f"In a hash space of K = {num_buckets} buckets:")
+    print(f"- Dirichlet's Pigeonhole Principle guarantees a collision at N = {num_buckets + 1} items.")
+    print(f"- However, by the Birthday Paradox, the collision probability exceeds 50%")
+    print(f"  at approximately N ≈ 1.177 * sqrt({num_buckets}) ≈ {int(1.177 * (num_buckets ** 0.5))} items!")
+
+    sample_items = [f"item_{i}" for i in range(25)]
+    demonstrate_pigeonhole_principle(sample_items, num_buckets)
 
 
-def demonstrate_sha256_comparison() -> None:
-    print("\nToy hash versus SHA-256")
+def demonstrate_sha256_comparison(first: str = "listen", second: str = "silent") -> None:
+    """
+    Compare toy hash with SHA-256 using colliding inputs.
+    Explains why Stage 4 byte-verification is required.
+    """
+    print("\n========== TOY HASH VS SHA-256 COMPARISON ==========")
+    print(f"Comparing inputs: '{first}' and '{second}'")
 
-    first = "hello"
-    second = "world"
+    toy_first = toy_hash(first, 16)
+    toy_second = toy_hash(second, 16)
 
-    toy_first = sum(ord(c) for c in first) % 16
-    toy_second = sum(ord(c) for c in second) % 16
+    real_first = hashlib.sha256(first.encode("utf-8")).hexdigest()
+    real_second = hashlib.sha256(second.encode("utf-8")).hexdigest()
 
-    real_first = hashlib.sha256(first.encode()).hexdigest()
-    real_second = hashlib.sha256(second.encode()).hexdigest()
+    print(f"\n1. Toy Hash (16 buckets):")
+    print(f"   toy_hash('{first}')  = {toy_first}")
+    print(f"   toy_hash('{second}') = {toy_second}")
 
-    print(f"Toy hash of {first}: {toy_first}")
-    print(f"Toy hash of {second}: {toy_second}")
-    print(f"SHA-256 of {first}: {real_first}")
-    print(f"SHA-256 of {second}: {real_second}")
+    if toy_first == toy_second and first != second:
+        print("   -> COLLISION DETECTED! Two distinct strings produced the identical toy hash.")
+    else:
+        print(f"   -> Toy hashes are: {toy_first} and {toy_second}")
 
-    print("Hashes help identify candidates, but byte comparison")
-    print("confirms whether file contents are exactly equal.")
+    print(f"\n2. Cryptographic SHA-256 (2^256 states):")
+    print(f"   sha256('{first}')  = {real_first}")
+    print(f"   sha256('{second}') = {real_second}")
+
+    if real_first == real_second:
+        print("   -> SHA-256 Collision!")
+    else:
+        print("   -> Distinct SHA-256 digests.")
+
+    print("\n3. Mathematical Insight (Pigeonhole Principle):")
+    print("   The input domain of arbitrary files is INFINITE, but the SHA-256 output space")
+    print("   is FINITE (2^256 values). By the Pigeonhole Principle, collisions mathematically")
+    print("   MUST exist for SHA-256 as well.")
+    print("   Therefore, our detector performs Stage 4 byte-by-byte exact verification")
+    print("   to guarantee 100% precision and zero false positives.")
+
+
+def demonstrate_files_collision(file1: Path, file2: Path) -> None:
+    """
+    Demonstrate toy hash, SHA-256, and byte comparison on actual files.
+    """
+    file1 = Path(file1)
+    file2 = Path(file2)
+
+    if not file1.is_file() or not file2.is_file():
+        print(f"Error: One or both files do not exist: {file1}, {file2}")
+        return
+
+    print("\n========== FILE COMPARISON & COLLISION TEST ==========")
+    print(f"File 1: {file1.name} ({file1.stat().st_size} bytes)")
+    print(f"File 2: {file2.name} ({file2.stat().st_size} bytes)")
+
+    toy1 = toy_hash(file1, 16)
+    toy2 = toy_hash(file2, 16)
+
+    sha1 = compute_file_sha256(file1)
+    sha2 = compute_file_sha256(file2)
+
+    identical = compare_files_byte_by_byte(file1, file2)
+
+    print(f"\n- Toy Hash (16 buckets):")
+    print(f"    File 1: {toy1}")
+    print(f"    File 2: {toy2}")
+    if toy1 == toy2:
+        print("    -> TOY HASH COLLISION (Identical bucket)")
+
+    print(f"\n- Cryptographic SHA-256:")
+    print(f"    File 1: {sha1}")
+    print(f"    File 2: {sha2}")
+    if sha1 == sha2:
+        print("    -> SHA-256 MATCH")
+    else:
+        print("    -> SHA-256 MISMATCH")
+
+    print(f"\n- Stage 4 Byte-by-Byte Verification:")
+    print(f"    Identical content: {identical}")
 
 
 def run_interactive_demo() -> None:
     print(BANNER)
 
+    default_words = [
+        "apple", "banana", "cherry", "date", "fig", "grape",
+        "kiwi", "lemon", "mango", "orange", "peach", "pear",
+        "plum", "berry", "melon", "papaya", "lime", "coconut"
+    ]
+
     while True:
         print("\n1. Pigeonhole Principle and collisions")
         print("2. Birthday Paradox illustration")
-        print("3. Toy hash vs SHA-256")
-        print("4. Exit")
+        print("3. Toy hash vs SHA-256 collision comparison")
+        print("4. Compare files in test_folder")
+        print("5. Exit")
 
-        choice = input("Choose an option: ")
+        choice = input("Choose an option: ").strip()
 
         if choice == "1":
-            words = input("Enter words separated by commas: ").split(",")
-            words = [word.strip() for word in words if word.strip()]
+            user_input = input("Enter words separated by commas (press Enter for default 18 words): ").strip()
+            if user_input:
+                words = [w.strip() for w in user_input.split(",") if w.strip()]
+            else:
+                words = default_words
+                print(f"Using {len(words)} default words.")
             demonstrate_pigeonhole_principle(words)
 
         elif choice == "2":
             demonstrate_birthday_paradox()
 
         elif choice == "3":
-            demonstrate_sha256_comparison()
+            user_pair = input("Enter 2 words separated by comma (press Enter for 'listen, silent'): ").strip()
+            if user_pair and "," in user_pair:
+                w1, w2 = [w.strip() for w in user_pair.split(",", 1)]
+                demonstrate_sha256_comparison(w1, w2)
+            else:
+                demonstrate_sha256_comparison("listen", "silent")
 
         elif choice == "4":
+            test_dir = Path("test_folder")
+            files = [f for f in test_dir.iterdir() if f.is_file()] if test_dir.is_dir() else []
+            if len(files) >= 2:
+                demonstrate_files_collision(files[0], files[1])
+            else:
+                print("test_folder needs at least 2 files to compare.")
+
+        elif choice == "5":
             break
 
         else:
@@ -125,3 +230,4 @@ def run_interactive_demo() -> None:
 
 if __name__ == "__main__":
     run_interactive_demo()
+

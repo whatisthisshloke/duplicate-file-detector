@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 import os
 import time
 
@@ -33,17 +33,23 @@ class ScanResult:
         )
 
 
-
 def scan_directory(
-    root_path: Path,
+    root_path: Union[str, Path],
     min_size_bytes: int = 0,
     include_hidden: bool = False,
     follow_symlinks: bool = False,
     progress_callback: Optional[Callable[[int, Path], None]] = None,
 ) -> ScanResult:
+    """
+    Recursively scan root_path, group files by size, and return a ScanResult.
+    """
+    root_path = Path(root_path)
+
+    if not root_path.exists():
+        raise FileNotFoundError(f"Directory does not exist: {root_path}")
 
     if not root_path.is_dir():
-        raise NotADirectoryError("Directory does not exist")
+        raise NotADirectoryError(f"Path is not a directory: {root_path}")
 
     if min_size_bytes < 0:
         raise ValueError("Minimum size cannot be negative")
@@ -52,22 +58,25 @@ def scan_directory(
     result = ScanResult(root_directory=root_path)
 
     for current_dir, dirs, files in os.walk(
-    root_path,
-    followlinks=follow_symlinks
+        root_path,
+        followlinks=follow_symlinks
     ):
         if not include_hidden:
             dirs[:] = [
                 directory for directory in dirs
                 if not directory.startswith(".")
-        ]
+            ]
 
         for filename in files:
-            file_path = Path(current_dir) / filename
-
             if not include_hidden and filename.startswith("."):
                 continue
 
+            file_path = Path(current_dir) / filename
+
             try:
+                if not follow_symlinks and file_path.is_symlink():
+                    continue
+
                 file_size = file_path.stat().st_size
 
                 if file_size < min_size_bytes:
@@ -96,3 +105,4 @@ def scan_directory(
     result.scan_duration_seconds = time.time() - start_time
 
     return result
+

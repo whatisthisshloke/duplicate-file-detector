@@ -13,60 +13,27 @@ from dataclasses import dataclass, field, asdict, is_dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 from collections import defaultdict
-import hashlib
 import json
 import time
 
 from scanner import ScanResult, scan_directory
+from hash_utils import (
+    format_bytes,
+    compute_file_sha256,
+    compute_partial_hash,
+    compare_files_byte_by_byte,
+)
 
-
-# ---------- Helper functions ----------
-
-def format_bytes(size: int) -> str:
-    """Convert bytes into a readable size such as KB or MB."""
-    units = ["B", "KB", "MB", "GB", "TB"]
-    value = float(size)
-
-    for unit in units:
-        if value < 1024 or unit == units[-1]:
-            return f"{value:.2f} {unit}"
-        value /= 1024
-
-    return f"{size} B"
-
-
-def calculate_sha256(path: Path) -> str:
-    """Calculate a file's SHA-256 hash without loading it all into memory."""
-    sha256 = hashlib.sha256()
-
-    with path.open("rb") as file:
-        while True:
-            chunk = file.read(4096)
-            if not chunk:
-                break
-            sha256.update(chunk)
-
-    return sha256.hexdigest()
-
-
-def files_are_identical(first: Path, second: Path) -> bool:
-    """Compare two files byte-for-byte in chunks."""
-    with first.open("rb") as file_a, second.open("rb") as file_b:
-        while True:
-            chunk_a = file_a.read(4096)
-            chunk_b = file_b.read(4096)
-
-            if chunk_a != chunk_b:
-                return False
-
-            if not chunk_a:
-                return True
+# Aliases for backwards compatibility
+calculate_sha256 = compute_file_sha256
+files_are_identical = compare_files_byte_by_byte
 
 
 def report_progress(callback, message, current, total):
     """Call the progress callback if one was supplied."""
     if callback is not None:
         callback(message, current, total)
+
 
 
 # ---------- Data classes ----------
@@ -202,26 +169,52 @@ def find_duplicates(
 
     stage_durations["scan"] = time.perf_counter() - stage_start
 
-    # Stage 2: scanner.py has already grouped files by size.
-    candidate_groups = scan_result.candidate_size_groups
+    # Stage 2: Partial hash sampling on size candidates.
+    stage_start = time.perf_counter()
+    candidate_size_groups = scan_result.candidate_size_groups
+    partial_candidate_groups = defaultdict(list)
 
-    stage_durations["size_grouping"] = 0.0
+    total_size_candidates = sum(
+        len(paths) for paths in candidate_size_groups.values()
+    )
+    partial_counter = 0
 
-    # Stage 3: Calculate SHA-256 for candidate files.
+    for size, paths in candidate_size_groups.items():
+        partial_map = defaultdict(list)
+        for path in paths:
+            partial_counter += 1
+            report_progress(
+                status_callback, "Sampling partial hashes", partial_counter, total_size_candidates
+            )
+            try:
+                p_hash = compute_partial_hash(path)
+                partial_map[p_hash].append(path)
+            except OSError as error:
+                scan_result.skipped_files.append(f"{path}: {error}")
+
+        for p_hash, matching in partial_map.items():
+            if len(matching) >= 2:
+                partial_candidate_groups[size].extend(matching)
+
+    stage_durations["partial_hash"] = time.perf_counter() - stage_start
+    stage_durations["size_grouping"] = stage_durations["partial_hash"]
+
+    # Stage 3: Calculate full SHA-256 for surviving candidate files.
     stage_start = time.perf_counter()
     hashes = {}
 
     all_candidates = [
         path
-        for paths in candidate_groups.values()
+        for paths in partial_candidate_groups.values()
         for path in paths
     ]
 
     total = len(all_candidates)
 
     for index, path in enumerate(all_candidates, start=1):
-        if status_callback:
-            status_callback("Hashing files", index, total)
+        report_progress(
+            status_callback, "Hashing files", index, total
+        )
 
         try:
             hashes[path] = calculate_sha256(path)
@@ -232,11 +225,11 @@ def find_duplicates(
 
     stage_durations["hashing"] = time.perf_counter() - stage_start
 
-    # Stage 4: Group matching hashes and verify file contents.
+    # Stage 4: Group matching hashes and verify file contents byte-by-byte.
     stage_start = time.perf_counter()
     duplicate_groups = []
 
-    for size, paths in candidate_groups.items():
+    for size, paths in partial_candidate_groups.items():
         hash_groups = defaultdict(list)
 
         for path in paths:
@@ -337,10 +330,11 @@ def generate_safe_cleanup_script(
 
         # Keep the first path and propose the remaining copies.
         for duplicate in group.files[1:]:
-            safe_path = str(duplicate).replace("'", "'\\''")
+            safe_path = Path(duplicate).as_posix().replace("'", "'\\''")
             lines.append(f"# rm -- '{safe_path}'")
 
         lines.append("")
 
     with script_path.open("w", encoding="utf-8", newline="\n") as file:
         file.write("\n".join(lines))
+

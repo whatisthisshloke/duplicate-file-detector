@@ -8,6 +8,7 @@ printing terminal reports, running math demos, and exporting safe scripts.
 
 import argparse
 from pathlib import Path
+import sys
 
 from duplicate_finder import (
     DetectionReport,
@@ -15,13 +16,18 @@ from duplicate_finder import (
     export_report_json,
     generate_safe_cleanup_script,
 )
+from collision_demo import run_interactive_demo
 
 
 def parse_size_string(size_str: str) -> int:
     """
     Convert a size like '1024', '4KB', '10MB', or '1GB' to bytes.
     """
-    size_str = size_str.strip().upper()
+    size_str = size_str.strip()
+    if size_str.startswith("-"):
+        raise ValueError("Size cannot be negative.")
+
+    size_str = size_str.upper()
 
     units = {
         "B": 1,
@@ -37,7 +43,11 @@ def parse_size_string(size_str: str) -> int:
 
     for char in size_str:
         if char.isdigit() or char == ".":
+            if unit:
+                raise ValueError(f"Invalid size string: {size_str}")
             number += char
+        elif char.isspace():
+            continue
         else:
             unit += char
 
@@ -101,13 +111,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     """Build the command-line argument parser."""
 
     parser = argparse.ArgumentParser(
-        description="Find duplicate files in a directory."
+        description="Find duplicate files in a directory or run collision demos."
     )
 
     parser.add_argument(
         "folder",
         type=Path,
-        help="Folder to scan."
+        nargs="?",
+        default=None,
+        help="Folder to scan (optional; if omitted, terminal menu opens)."
+    )
+
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run the Pigeonhole Principle & Hash Collision interactive demo."
     )
 
     parser.add_argument(
@@ -158,12 +176,61 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def run_interactive_menu() -> None:
+    """Run interactive menu when no folder argument is provided."""
+    while True:
+        print("\n--- Main Menu ---")
+        print("1. Scan directory for duplicate files")
+        print("2. Run Pigeonhole Principle & Hash Collision Demonstration")
+        print("3. Exit")
+
+        choice = input("Select an option (1-3): ").strip()
+
+        if choice == "1":
+            folder_input = input("Enter directory path to scan (press Enter for 'test_folder'): ").strip()
+            folder_path = Path(folder_input) if folder_input else Path("test_folder")
+
+            if not folder_path.is_dir():
+                print(f"Error: Directory not found or not a directory: {folder_path}")
+                continue
+
+            try:
+                report = find_duplicates(
+                    root_path=folder_path,
+                    min_size_bytes=0,
+                    include_hidden=False,
+                    follow_symlinks=False,
+                    verify_byte_by_byte=True,
+                )
+                display_report_cli(report, verbose=True)
+            except Exception as error:
+                print(f"Error during scan: {error}")
+
+        elif choice == "2":
+            run_interactive_demo()
+
+        elif choice == "3":
+            print("Exiting Duplicate File Detector.")
+            break
+
+        else:
+            print("Invalid choice. Please select 1, 2, or 3.")
+
+
 def main() -> None:
     """Main CLI entry point."""
     parser = build_arg_parser()
     args = parser.parse_args()
 
     print_banner()
+
+    if args.demo:
+        run_interactive_demo()
+        return
+
+    if args.folder is None:
+        run_interactive_menu()
+        return
 
     if not args.folder.is_dir():
         parser.error(f"Folder does not exist or is not a directory: {args.folder}")
@@ -196,3 +263,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
