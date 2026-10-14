@@ -7,12 +7,12 @@ import time
 @dataclass
 class ScanResult:
     """Holds summary statistics and partitioned files from a filesystem scan."""
-    root_directory: Path
-    total_files_found: int = 0
-    total_bytes_found: int = 0
-    size_groups: Dict[int, List[Path]] = field(default_factory=dict)
-    candidate_size_groups: Dict[int, List[Path]] = field(default_factory=dict)
-    skipped_files: List[str] = field(default_factory=list)
+    root_directory: Path #directory being scanned
+    total_files_found: int = 0 #num. of files found that pass the filter
+    total_bytes_found: int = 0 #combined size of all eligible files
+    size_groups: Dict[int, List[Path]] 
+    candidate_size_groups: Dict[int, List[Path]]
+    skipped_files: List[str] 
     scan_duration_seconds: float = 0.0
 
     @property
@@ -37,7 +37,6 @@ def scan_directory(
     root_path: Union[str, Path],
     min_size_bytes: int = 0,
     include_hidden: bool = False,
-    follow_symlinks: bool = False,
     progress_callback: Optional[Callable[[int, Path], None]] = None,
 ) -> ScanResult:
     """
