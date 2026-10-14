@@ -58,7 +58,6 @@ def scan_directory(
 
     for current_dir, dirs, files in os.walk(
         root_path,
-        followlinks=follow_symlinks
     ):
         if not include_hidden:
             dirs[:] = [
@@ -73,9 +72,6 @@ def scan_directory(
             file_path = Path(current_dir) / filename
 
             try:
-                if not follow_symlinks and file_path.is_symlink():
-                    continue
-
                 file_size = file_path.stat().st_size
 
                 if file_size < min_size_bytes:
